@@ -228,6 +228,8 @@ include_directories(src/include)
 # Include tree-sitter headers - both public API and internal headers
 include_directories(third_party/tree-sitter/lib/include)
 include_directories(third_party/tree-sitter/lib/src)
+# Vendored yyjson for parsing register_language() semantic configs
+include_directories(third_party/yyjson)
 
 # Find Python for script execution
 find_package(Python3 COMPONENTS Interpreter)
@@ -301,6 +303,11 @@ set(EXTENSION_SOURCES
     src/language_adapters/toml_adapter.cpp
     src/language_adapters/zig_adapter.cpp
     src/language_adapters/dart_adapter.cpp
+    src/language_adapters/dynamic_language_adapter.cpp
+    src/dynamic_library_loader.cpp
+    src/register_language_function.cpp
+    src/language_config_json.cpp
+    third_party/yyjson/yyjson.c
     src/read_ast_streaming_function.cpp
     # src/read_ast_objects_hybrid.cpp (removed - objects API not used)
     src/ast_sql_macros.cpp
@@ -384,9 +391,10 @@ if(TARGET generate-parsers)
 endif()
 
 # Link tree-sitter library (native builds only — WASM embeds sources directly)
+# CMAKE_DL_LIBS provides dlopen for register_language() grammar loading
 if(NOT WASM_LOADABLE_EXTENSIONS)
-    target_link_libraries(${EXTENSION_NAME} tree-sitter)
-    target_link_libraries(${LOADABLE_EXTENSION_NAME} tree-sitter)
+    target_link_libraries(${EXTENSION_NAME} tree-sitter ${CMAKE_DL_LIBS})
+    target_link_libraries(${LOADABLE_EXTENSION_NAME} tree-sitter ${CMAKE_DL_LIBS})
 endif()
 
 install(
