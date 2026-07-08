@@ -1,4 +1,5 @@
 #include "ast_file_utils.hpp"
+#include "language_adapter.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/file_system.hpp"
@@ -278,6 +279,12 @@ string ASTFileUtils::DetectLanguageFromPath(const string &file_path) {
 		return it->second;
 	}
 
+	// Runtime-registered languages
+	auto dynamic_language = LanguageAdapterRegistry::GetInstance().FindDynamicLanguageForExtension(extension);
+	if (!dynamic_language.empty()) {
+		return dynamic_language;
+	}
+
 	return "auto"; // Extension not recognized
 }
 
@@ -291,7 +298,8 @@ vector<string> ASTFileUtils::GetSupportedExtensions(const string &language) {
 	if (it != LANGUAGE_TO_EXTENSIONS.end()) {
 		return it->second;
 	}
-	return {}; // Language not recognized
+	// Runtime-registered languages (empty if the language is not registered)
+	return LanguageAdapterRegistry::GetInstance().GetDynamicExtensions(language);
 }
 
 // Helper function to check if a file extension is in the supported list
