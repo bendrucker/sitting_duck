@@ -22,10 +22,6 @@ if(NOT WASM_LOADABLE_EXTENSIONS)
         set(TREE_SITTER_FEATURE_WASM ON CACHE BOOL "Enable the Wasm feature" FORCE)
         # wasm_grammar_loader.cpp calls wasm_engine_new() from wasmtime's wasm.h
         include_directories(SYSTEM "${WASMTIME_INCLUDE_DIR}")
-        if(WIN32)
-            # wasm.h declares dllimport by default, which breaks static linking
-            add_compile_definitions(WASM_API_EXTERN= WASI_API_EXTERN=)
-        endif()
     else()
         # FORCE so toggling the option off overrides the cached ON from an
         # earlier configure of the same build directory
@@ -416,6 +412,12 @@ endif()
 if(NOT WASM_LOADABLE_EXTENSIONS)
     target_link_libraries(${EXTENSION_NAME} tree-sitter ${CMAKE_DL_LIBS})
     target_link_libraries(${LOADABLE_EXTENSION_NAME} tree-sitter ${CMAKE_DL_LIBS})
+    if(SITTING_DUCK_WASM_GRAMMARS AND WIN32)
+        # wasm.h declares dllimport by default, which breaks static linking of
+        # wasm_grammar_loader.cpp's wasm_engine_new() call
+        target_compile_definitions(${EXTENSION_NAME} PRIVATE WASM_API_EXTERN= WASI_API_EXTERN=)
+        target_compile_definitions(${LOADABLE_EXTENSION_NAME} PRIVATE WASM_API_EXTERN= WASI_API_EXTERN=)
+    endif()
 endif()
 
 install(

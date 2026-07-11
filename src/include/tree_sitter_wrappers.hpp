@@ -46,7 +46,7 @@ public:
 	// A wasm store must go back to the loader's pool, never to ts_parser_delete:
 	// deleting a store frees the engine every store and wasm language shares
 	~TSParserWrapper() {
-		if (parser_) {
+		if (has_wasm_store_ && parser_) {
 			WasmGrammarLoader::ReleaseParserStore(ts_parser_take_wasm_store(parser_.get()));
 		}
 	}

@@ -3,8 +3,9 @@
 
 #ifdef TREE_SITTER_FEATURE_WASM
 
+#include "duckdb/common/mutex.hpp"
+
 #include <cstdlib>
-#include <mutex>
 #include <wasm.h>
 
 namespace duckdb {
@@ -32,10 +33,10 @@ const TSLanguage *WasmGrammarLoader::LoadLanguageFromBytes(const string &load_na
 	// One store handles all registrations. Stores are single-parser, so it must
 	// not be shared with query execution, and registration is rare enough that
 	// serializing loads behind a mutex costs nothing.
-	static std::mutex registration_mutex;
+	static mutex registration_mutex;
 	static TSWasmStore *registration_store = nullptr;
 
-	std::lock_guard<std::mutex> guard(registration_mutex);
+	lock_guard<mutex> guard(registration_mutex);
 	TSWasmError error {};
 	if (!registration_store) {
 		registration_store = ts_wasm_store_new(GetEngine(), &error);
@@ -55,8 +56,8 @@ const TSLanguage *WasmGrammarLoader::LoadLanguageFromBytes(const string &load_na
 // engine (tree-sitter#3454), so stores must live for the process lifetime.
 // The pool caps live stores at peak parser concurrency and reuses them, which
 // also amortizes the few-millisecond store construction cost.
-static std::mutex &StorePoolMutex() {
-	static std::mutex pool_mutex;
+static mutex &StorePoolMutex() {
+	static mutex pool_mutex;
 	return pool_mutex;
 }
 
@@ -67,7 +68,7 @@ static vector<TSWasmStore *> &StorePool() {
 
 TSWasmStore *WasmGrammarLoader::AcquireParserStore() {
 	{
-		std::lock_guard<std::mutex> guard(StorePoolMutex());
+		lock_guard<mutex> guard(StorePoolMutex());
 		auto &pool = StorePool();
 		if (!pool.empty()) {
 			TSWasmStore *store = pool.back();
@@ -87,7 +88,7 @@ void WasmGrammarLoader::ReleaseParserStore(TSWasmStore *store) {
 	if (!store) {
 		return;
 	}
-	std::lock_guard<std::mutex> guard(StorePoolMutex());
+	lock_guard<mutex> guard(StorePoolMutex());
 	StorePool().push_back(store);
 }
 

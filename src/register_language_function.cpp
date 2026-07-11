@@ -99,23 +99,26 @@ static unique_ptr<GlobalTableFunctionState> RegisterLanguageInit(ClientContext &
 	return make_uniq<RegisterLanguageGlobalState>();
 }
 
-// Wasm input is detected by content (the \0asm magic), not file extension.
-// Reading goes through DuckDB's FileSystem so any VFS path works, including
-// httpfs URLs. Paths the VFS cannot open fall through to the dlopen path,
-// which resolves bare library names via the dynamic linker's search path.
-static bool IsWasmGrammarFile(FileSystem &fs, const string &path) {
+// Wasm input is detected by content (the \0asm magic), not file extension
+static bool HasWasmMagic(const string &bytes) {
 	static constexpr char WASM_MAGIC[4] = {0, 'a', 's', 'm'};
+	return bytes.size() >= sizeof(WASM_MAGIC) && std::memcmp(bytes.data(), WASM_MAGIC, sizeof(WASM_MAGIC)) == 0;
+}
+
+// Reading goes through DuckDB's FileSystem so any VFS path works, including
+// httpfs URLs, and the bytes are read once for both wasm detection and
+// loading. Paths the VFS cannot open fall through to the dlopen path, which
+// resolves bare library names via the dynamic linker's search path.
+static bool TryReadGrammarFile(FileSystem &fs, const string &path, string &bytes) {
 	try {
-		auto handle = fs.OpenFile(path, FileFlags::FILE_FLAGS_READ);
-		char magic[4];
-		return fs.Read(*handle, magic, sizeof(magic)) == sizeof(magic) &&
-		       std::memcmp(magic, WASM_MAGIC, sizeof(magic)) == 0;
+		bytes = ASTFileUtils::ReadFileToString(fs, path);
+		return true;
 	} catch (const std::exception &) {
 		return false;
 	}
 }
 
-static const TSLanguage *LoadWasmGrammar(FileSystem &fs, const RegisterLanguageBindData &bind_data) {
+static const TSLanguage *LoadWasmGrammar(const string &bytes, const RegisterLanguageBindData &bind_data) {
 	// tree-sitter looks up the module's tree_sitter_<x> export by <x>, so the
 	// symbol override carries the same meaning as in the shared-library path
 	const string expected_prefix = "tree_sitter_";
@@ -125,7 +128,6 @@ static const TSLanguage *LoadWasmGrammar(FileSystem &fs, const RegisterLanguageB
 		                            bind_data.symbol);
 	}
 	auto load_name = bind_data.symbol.substr(expected_prefix.size());
-	auto bytes = ASTFileUtils::ReadFileToString(fs, bind_data.library_path);
 	return WasmGrammarLoader::LoadLanguageFromBytes(load_name, bytes, bind_data.library_path);
 }
 
@@ -166,9 +168,10 @@ static void RegisterLanguageFunction(ClientContext &context, TableFunctionInput 
 	// All validation happens before any registry mutation: a failure below
 	// leaves previously registered languages untouched.
 	auto &fs = FileSystem::GetFileSystem(context);
-	const TSLanguage *language = IsWasmGrammarFile(fs, bind_data.library_path)
-	                                 ? LoadWasmGrammar(fs, bind_data)
-	                                 : LoadSharedLibraryGrammar(bind_data);
+	string grammar_bytes;
+	const bool is_wasm = TryReadGrammarFile(fs, bind_data.library_path, grammar_bytes) && HasWasmMagic(grammar_bytes);
+	const TSLanguage *language =
+	    is_wasm ? LoadWasmGrammar(grammar_bytes, bind_data) : LoadSharedLibraryGrammar(bind_data);
 
 	uint32_t abi_version = ts_language_version(language);
 	if (!IsCompatibleLanguageAbi(abi_version)) {
