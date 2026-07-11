@@ -543,17 +543,17 @@ SELECT * FROM read_ast('Makefile', 'bash');  -- Force specific language
 
 ## Runtime Language Registration
 
-Beyond the built-in languages, you can register additional tree-sitter grammars at runtime from a compiled shared library. This loads a grammar the extension was not built with, gives it a name and file extensions, and optionally attaches a semantic config so its nodes map into the semantic type system.
+Beyond the built-in languages, you can register additional tree-sitter grammars at runtime, either from a compiled shared library or from a `.wasm` grammar artifact. This loads a grammar the extension was not built with, gives it a name and file extensions, and optionally attaches a semantic config so its nodes map into the semantic type system.
 
 ### `register_language(name, lib_path, [symbol], [config], [extensions], [aliases], [overwrite])`
 
-**Grammar registration function** - Loads a tree-sitter grammar from a shared library and registers it under a new language name.
+**Grammar registration function** - Loads a tree-sitter grammar from a shared library or a `.wasm` artifact and registers it under a new language name.
 
 #### Parameters
 
 - `name` (VARCHAR): Language name to register. Must match `[a-z][a-z0-9_]*` (lowercase letter first, then lowercase letters, digits, or underscores).
-- `lib_path` (VARCHAR): Path to the compiled grammar shared library (`.so`, `.dylib`, or `.dll`).
-- `symbol` (VARCHAR, optional): Name of the exported parser function to load from the library. Defaults to `tree_sitter_<name>`. Override this when the library's symbol does not match the name you are registering under.
+- `lib_path` (VARCHAR): Path to the compiled grammar shared library (`.so`, `.dylib`, or `.dll`) or to a `.wasm` grammar module. The two are distinguished by file content (the wasm magic bytes), not the extension. A wasm grammar can live on any filesystem DuckDB can read, including `https://` URLs with httpfs loaded.
+- `symbol` (VARCHAR, optional): Name of the exported parser function to load. Defaults to `tree_sitter_<name>`. Override this when the artifact's export does not match the name you are registering under. WASM grammar modules always export `tree_sitter_<language>`, so for wasm input the symbol must keep that prefix.
 - `config` (VARCHAR, optional): Path to a JSON semantic config file (see [JSON semantic config](#json-semantic-config)). Without it, nodes fall back to default classification.
 - `extensions` (VARCHAR[], optional): File extensions that should auto-detect as this language, for example `['jsond']`.
 - `aliases` (VARCHAR[], optional): Alternate names that resolve to this language.
@@ -602,6 +602,30 @@ cc -shared -fPIC -I src src/parser.c src/scanner.c -o libmylang.so
 ```
 
 The resulting library is specific to the OS and CPU architecture it was built on.
+
+### Registering a WASM Grammar
+
+Most grammar repos ship a prebuilt `tree-sitter-<language>.wasm` in their GitHub releases (produced by `tree-sitter build --wasm`), and the same artifact loads on every OS and architecture. With httpfs you can register one straight from the release URL:
+
+```sql
+INSTALL httpfs; LOAD httpfs;
+
+SELECT * FROM register_language(
+    'yaml',
+    'https://github.com/tree-sitter-grammars/tree-sitter-yaml/releases/download/v0.7.2/tree-sitter-yaml.wasm',
+    extensions := ['yaml', 'yml']
+);
+
+SELECT type, name FROM read_ast('config.yaml') LIMIT 5;
+```
+
+The module's export decides the default name. `tree-sitter-yaml.wasm` exports `tree_sitter_yaml`, so registering it as `yaml` needs no symbol override. To register under a different name, pass the module's real export: `symbol := 'tree_sitter_yaml'`.
+
+WASM grammars run inside a bundled wasmtime runtime, so a few caveats apply on top of the shared-library ones:
+
+- Native builds only. The Emscripten (duckdb-wasm) build of this extension cannot run wasmtime and rejects `register_language()` entirely, as do builds configured with `SITTING_DUCK_WASM_GRAMMARS=OFF`.
+- Parsing runs the grammar's state machine inside wasm, which is slower than a natively compiled grammar (about 2x on a JSON benchmark). Fine for the long tail of languages, but compile a shared library if you are parsing at scale.
+- External scanners work: they execute against wasm stdlib shims bundled with tree-sitter. A scanner using unusual libc facilities can fail to load, which surfaces as a registration error rather than a crash.
 
 ### JSON Semantic Config
 
@@ -660,7 +684,7 @@ A grammar registered without a config still parses. Every node type it produces 
 - `register_language()` loads and runs native code, so it needs `enable_external_access` (on by default). It errors with a permission message when external access is disabled. Only register libraries you built or trust.
 - A registration lives in the current process and is not persisted. Re-run `register_language()` in each new session, for example from an init script.
 - There is no unregister function. Use `overwrite := true` to replace an existing dynamic registration.
-- The library must be built for the current operating system and CPU architecture.
+- A shared library must be built for the current operating system and CPU architecture. A `.wasm` grammar is platform-independent but needs a build with wasm grammar support (the default for native builds).
 - The grammar's ABI version must fall within the tree-sitter ABI range this extension supports.
 
 ### Auto-Detection and Introspection
