@@ -5,6 +5,13 @@
 #
 # Providing both cache variables yourself skips the download entirely.
 
+if(CMAKE_VERSION VERSION_LESS "3.18")
+    message(FATAL_ERROR
+        "Fetching wasmtime needs CMake 3.18+ for file(ARCHIVE_EXTRACT). "
+        "Upgrade CMake, build with -DSITTING_DUCK_WASM_GRAMMARS=OFF, or provide "
+        "-DWASMTIME_INCLUDE_DIR=... and -DWASMTIME_LIBRARY=... yourself.")
+endif()
+
 # Pinned to the wasmtime C API generation the vendored tree-sitter targets
 # (its Cargo.lock pins wasmtime 29.x). Later wasmtime releases changed the
 # layout of wasmtime_func_t, which wasm_store.c relies on, so bump this

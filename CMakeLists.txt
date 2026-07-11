@@ -9,6 +9,7 @@ set(TARGET_NAME sitting_duck)
 # because WASM side modules (-sSIDE_MODULE=1) can't resolve symbols from
 # separately-linked static libraries — the WASM linker leaves them as
 # unresolved dynamic imports that the host module doesn't provide.
+#
 # Runtime loading of .wasm grammar artifacts via register_language(). On by
 # default for native builds (links wasmtime statically). Set OFF to build
 # without the wasmtime download and size cost. Never available under
@@ -20,8 +21,6 @@ if(NOT WASM_LOADABLE_EXTENSIONS)
     if(SITTING_DUCK_WASM_GRAMMARS)
         include(cmake/FetchWasmtime.cmake)
         set(TREE_SITTER_FEATURE_WASM ON CACHE BOOL "Enable the Wasm feature" FORCE)
-        # wasm_grammar_loader.cpp calls wasm_engine_new() from wasmtime's wasm.h
-        include_directories(SYSTEM "${WASMTIME_INCLUDE_DIR}")
     else()
         # FORCE so toggling the option off overrides the cached ON from an
         # earlier configure of the same build directory
@@ -412,11 +411,15 @@ endif()
 if(NOT WASM_LOADABLE_EXTENSIONS)
     target_link_libraries(${EXTENSION_NAME} tree-sitter ${CMAKE_DL_LIBS})
     target_link_libraries(${LOADABLE_EXTENSION_NAME} tree-sitter ${CMAKE_DL_LIBS})
-    if(SITTING_DUCK_WASM_GRAMMARS AND WIN32)
-        # wasm.h declares dllimport by default, which breaks static linking of
-        # wasm_grammar_loader.cpp's wasm_engine_new() call
-        target_compile_definitions(${EXTENSION_NAME} PRIVATE WASM_API_EXTERN= WASI_API_EXTERN=)
-        target_compile_definitions(${LOADABLE_EXTENSION_NAME} PRIVATE WASM_API_EXTERN= WASI_API_EXTERN=)
+    if(SITTING_DUCK_WASM_GRAMMARS)
+        # wasm_grammar_loader.cpp calls wasm_engine_new() from wasmtime's wasm.h
+        target_include_directories(${EXTENSION_NAME} SYSTEM PRIVATE "${WASMTIME_INCLUDE_DIR}")
+        target_include_directories(${LOADABLE_EXTENSION_NAME} SYSTEM PRIVATE "${WASMTIME_INCLUDE_DIR}")
+        if(WIN32)
+            # wasm.h declares dllimport by default, which breaks static linking
+            target_compile_definitions(${EXTENSION_NAME} PRIVATE WASM_API_EXTERN= WASI_API_EXTERN=)
+            target_compile_definitions(${LOADABLE_EXTENSION_NAME} PRIVATE WASM_API_EXTERN= WASI_API_EXTERN=)
+        endif()
     endif()
 endif()
 

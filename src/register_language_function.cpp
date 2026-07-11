@@ -99,21 +99,39 @@ static unique_ptr<GlobalTableFunctionState> RegisterLanguageInit(ClientContext &
 	return make_uniq<RegisterLanguageGlobalState>();
 }
 
-// Wasm input is detected by content (the \0asm magic), not file extension
-static bool HasWasmMagic(const string &bytes) {
-	static constexpr char WASM_MAGIC[4] = {0, 'a', 's', 'm'};
-	return bytes.size() >= sizeof(WASM_MAGIC) && std::memcmp(bytes.data(), WASM_MAGIC, sizeof(WASM_MAGIC)) == 0;
-}
-
+// Wasm input is detected by content (the \0asm magic), not file extension.
 // Reading goes through DuckDB's FileSystem so any VFS path works, including
-// httpfs URLs, and the bytes are read once for both wasm detection and
-// loading. Paths the VFS cannot open fall through to the dlopen path, which
-// resolves bare library names via the dynamic linker's search path.
-static bool TryReadGrammarFile(FileSystem &fs, const string &path, string &bytes) {
+// httpfs URLs. Fills `bytes` with the whole module only when the magic
+// matches, so the shared-library path never pays more than the sniffed
+// header. Local paths the VFS cannot open fall through to the dlopen path,
+// which resolves bare library names via the dynamic linker's search path.
+// URI-scheme paths have no dlopen fallback, so their read errors propagate.
+static bool TryReadWasmGrammar(FileSystem &fs, const string &path, string &bytes) {
+	static constexpr char WASM_MAGIC[4] = {0, 'a', 's', 'm'};
 	try {
-		bytes = ASTFileUtils::ReadFileToString(fs, path);
+		auto handle = fs.OpenFile(path, FileFlags::FILE_FLAGS_READ);
+		char magic[sizeof(WASM_MAGIC)];
+		if (fs.Read(*handle, magic, sizeof(magic)) != static_cast<int64_t>(sizeof(magic)) ||
+		    std::memcmp(magic, WASM_MAGIC, sizeof(magic)) != 0) {
+			return false;
+		}
+		auto size = fs.GetFileSize(*handle);
+		bytes.resize(size);
+		std::memcpy(&bytes[0], magic, sizeof(magic));
+		idx_t total_read = sizeof(magic);
+		while (total_read < static_cast<idx_t>(size)) {
+			auto bytes_read = fs.Read(*handle, (void *)(bytes.data() + total_read), size - total_read);
+			if (bytes_read <= 0) {
+				throw IOException("Unexpected end of file while reading '%s': got %llu of %llu bytes", path,
+				                  static_cast<uint64_t>(total_read), static_cast<uint64_t>(size));
+			}
+			total_read += static_cast<idx_t>(bytes_read);
+		}
 		return true;
 	} catch (const std::exception &) {
+		if (ASTFileUtils::HasURIScheme(path)) {
+			throw;
+		}
 		return false;
 	}
 }
@@ -168,10 +186,10 @@ static void RegisterLanguageFunction(ClientContext &context, TableFunctionInput 
 	// All validation happens before any registry mutation: a failure below
 	// leaves previously registered languages untouched.
 	auto &fs = FileSystem::GetFileSystem(context);
-	string grammar_bytes;
-	const bool is_wasm = TryReadGrammarFile(fs, bind_data.library_path, grammar_bytes) && HasWasmMagic(grammar_bytes);
-	const TSLanguage *language =
-	    is_wasm ? LoadWasmGrammar(grammar_bytes, bind_data) : LoadSharedLibraryGrammar(bind_data);
+	string wasm_bytes;
+	const TSLanguage *language = TryReadWasmGrammar(fs, bind_data.library_path, wasm_bytes)
+	                                 ? LoadWasmGrammar(wasm_bytes, bind_data)
+	                                 : LoadSharedLibraryGrammar(bind_data);
 
 	uint32_t abi_version = ts_language_version(language);
 	if (!IsCompatibleLanguageAbi(abi_version)) {

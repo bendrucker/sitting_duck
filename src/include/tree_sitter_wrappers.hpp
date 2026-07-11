@@ -55,9 +55,12 @@ public:
 	TSParserWrapper(const TSParserWrapper &) = delete;
 	TSParserWrapper &operator=(const TSParserWrapper &) = delete;
 
-	// Enable moving
-	TSParserWrapper(TSParserWrapper &&) = default;
-	TSParserWrapper &operator=(TSParserWrapper &&) = default;
+	// Moving is disabled too: a defaulted move-assign would run ts_parser_delete
+	// on the target's parser with its wasm store still attached, freeing the
+	// shared engine. All users hold wrappers behind unique_ptr, so moves of the
+	// wrapper itself are never needed.
+	TSParserWrapper(TSParserWrapper &&) = delete;
+	TSParserWrapper &operator=(TSParserWrapper &&) = delete;
 
 	// Access underlying parser
 	TSParser *get() const {
@@ -90,8 +93,13 @@ public:
 			has_wasm_store_ = true;
 		}
 
+		// For wasm-backed languages this fails at runtime when module
+		// instantiation in this parser's store fails. InternalException would
+		// invalidate the whole database instance, so throw a recoverable type
+		// that only fails the query.
 		if (!ts_parser_set_language(parser_.get(), language)) {
-			throw InternalException("Failed to set language: " + language_name);
+			throw InvalidInputException("Failed to set language '%s' on parser%s", language_name,
+			                            ts_language_is_wasm(language) ? " (wasm module instantiation failed)" : "");
 		}
 	}
 

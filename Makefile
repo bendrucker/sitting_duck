@@ -38,8 +38,11 @@ regenerate-parsers: clean-parsers generate-parsers
 # The library is named .so on all platforms: dlopen() ignores the suffix, and a
 # uniform name keeps the sqllogictests platform-independent.
 # Run the dynamic language tests with:
-#   make test-grammar-lib
-#   SITTING_DUCK_TEST_GRAMMAR_DIR=build/test_grammars make test
+#   make test-grammar-lib test-grammar-wasm
+#   SITTING_DUCK_TEST_GRAMMAR_DIR=build/test_grammars \
+#     SITTING_DUCK_TEST_GRAMMAR_WASM_DIR=build/test_grammars make test
+# Builds configured with -DSITTING_DUCK_WASM_GRAMMARS=OFF should leave
+# SITTING_DUCK_TEST_GRAMMAR_WASM_DIR unset so the wasm tests skip.
 
 TEST_GRAMMAR_DIR := build/test_grammars
 
@@ -62,7 +65,9 @@ TEST_GRAMMAR_WASM_SHA256 := d2119fb98d5912719b13f9458574f8608d2d29dfbe45f6be1f86
 test-grammar-wasm:
 	mkdir -p $(TEST_GRAMMAR_DIR)
 	curl -fsSL -o $(TEST_GRAMMAR_DIR)/json_grammar.wasm "$(TEST_GRAMMAR_WASM_URL)"
-	echo "$(TEST_GRAMMAR_WASM_SHA256)  $(TEST_GRAMMAR_DIR)/json_grammar.wasm" | shasum -a 256 -c -
+	printf '%s  %s\n' "$(TEST_GRAMMAR_WASM_SHA256)" "$(TEST_GRAMMAR_DIR)/json_grammar.wasm" > $(TEST_GRAMMAR_DIR)/json_grammar.wasm.sha256
+	@if command -v sha256sum >/dev/null 2>&1; then sha256sum -c $(TEST_GRAMMAR_DIR)/json_grammar.wasm.sha256; \
+	else shasum -a 256 -c $(TEST_GRAMMAR_DIR)/json_grammar.wasm.sha256; fi
 	head -c 96 $(TEST_GRAMMAR_DIR)/json_grammar.wasm > $(TEST_GRAMMAR_DIR)/truncated.wasm
 	printf '\0asm\1\0\0\0not a real module' > $(TEST_GRAMMAR_DIR)/garbage.wasm
 

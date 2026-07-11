@@ -4,17 +4,22 @@
 
 require sitting_duck
 
-# Requires the fixtures produced by `make test-grammar-wasm` and a build with
-# WASM grammar support (SITTING_DUCK_WASM_GRAMMARS=ON, the default for native
-# builds). Run with: SITTING_DUCK_TEST_GRAMMAR_DIR=build/test_grammars make test
+# Requires the fixtures produced by `make test-grammar-lib test-grammar-wasm`
+# and a build with WASM grammar support (SITTING_DUCK_WASM_GRAMMARS=ON, the
+# native default). SITTING_DUCK_TEST_GRAMMAR_WASM_DIR is separate from the
+# shared-library fixture dir so builds without wasm support can leave it unset
+# and skip this file. See the Makefile's test-grammar targets for the full
+# invocation.
 require-env SITTING_DUCK_TEST_GRAMMAR_DIR
+
+require-env SITTING_DUCK_TEST_GRAMMAR_WASM_DIR
 
 # Happy path: register the JSON grammar from a release-style .wasm artifact.
 # The module exports tree_sitter_json, so registering under a different name
 # needs the same symbol override the shared-library path uses.
 query TIIT
 SELECT language, CAST(abi_version >= 13 AS INTEGER), node_type_count, status
-FROM register_language('jsonw', '${SITTING_DUCK_TEST_GRAMMAR_DIR}/json_grammar.wasm',
+FROM register_language('jsonw', '${SITTING_DUCK_TEST_GRAMMAR_WASM_DIR}/json_grammar.wasm',
                        symbol := 'tree_sitter_json',
                        extensions := ['jsonw'],
                        overwrite := true);
@@ -65,14 +70,14 @@ true
 
 # Garbage bytes behind a valid wasm magic fail at registration, not mid-query
 statement error
-SELECT * FROM register_language('wasmgarbage', '${SITTING_DUCK_TEST_GRAMMAR_DIR}/garbage.wasm',
+SELECT * FROM register_language('wasmgarbage', '${SITTING_DUCK_TEST_GRAMMAR_WASM_DIR}/garbage.wasm',
                                 symbol := 'tree_sitter_json');
 ----
 <REGEX>:.*Failed to load WASM grammar.*
 
 # A truncated wasm module fails the same way
 statement error
-SELECT * FROM register_language('wasmtrunc', '${SITTING_DUCK_TEST_GRAMMAR_DIR}/truncated.wasm',
+SELECT * FROM register_language('wasmtrunc', '${SITTING_DUCK_TEST_GRAMMAR_WASM_DIR}/truncated.wasm',
                                 symbol := 'tree_sitter_json');
 ----
 <REGEX>:.*Failed to load WASM grammar.*
@@ -80,7 +85,7 @@ SELECT * FROM register_language('wasmtrunc', '${SITTING_DUCK_TEST_GRAMMAR_DIR}/t
 # WASM grammar modules always export tree_sitter_<x>; other symbol shapes are
 # rejected with an explanation rather than a lookup failure
 statement error
-SELECT * FROM register_language('wasmsym', '${SITTING_DUCK_TEST_GRAMMAR_DIR}/json_grammar.wasm',
+SELECT * FROM register_language('wasmsym', '${SITTING_DUCK_TEST_GRAMMAR_WASM_DIR}/json_grammar.wasm',
                                 symbol := 'json_language');
 ----
 <REGEX>:.*tree_sitter_.*
@@ -88,7 +93,7 @@ SELECT * FROM register_language('wasmsym', '${SITTING_DUCK_TEST_GRAMMAR_DIR}/jso
 # The default symbol (tree_sitter_<name>) is not exported by this module, so
 # registration fails cleanly instead of registering a broken language
 statement error
-SELECT * FROM register_language('notjson', '${SITTING_DUCK_TEST_GRAMMAR_DIR}/json_grammar.wasm');
+SELECT * FROM register_language('notjson', '${SITTING_DUCK_TEST_GRAMMAR_WASM_DIR}/json_grammar.wasm');
 ----
 <REGEX>:.*Failed to load WASM grammar.*
 

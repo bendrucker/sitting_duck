@@ -28,6 +28,15 @@ static TSWasmEngine *GetEngine() {
 	return engine;
 }
 
+static TSWasmStore *NewStore() {
+	TSWasmError error {};
+	TSWasmStore *store = ts_wasm_store_new(GetEngine(), &error);
+	if (!store) {
+		throw InternalException("Failed to create wasm store: %s", ConsumeWasmError(error));
+	}
+	return store;
+}
+
 const TSLanguage *WasmGrammarLoader::LoadLanguageFromBytes(const string &load_name, const string &bytes,
                                                            const string &path) {
 	// One store handles all registrations. Stores are single-parser, so it must
@@ -37,13 +46,10 @@ const TSLanguage *WasmGrammarLoader::LoadLanguageFromBytes(const string &load_na
 	static TSWasmStore *registration_store = nullptr;
 
 	lock_guard<mutex> guard(registration_mutex);
-	TSWasmError error {};
 	if (!registration_store) {
-		registration_store = ts_wasm_store_new(GetEngine(), &error);
-		if (!registration_store) {
-			throw InternalException("Failed to create wasm store: %s", ConsumeWasmError(error));
-		}
+		registration_store = NewStore();
 	}
+	TSWasmError error {};
 	const TSLanguage *language = ts_wasm_store_load_language(registration_store, load_name.c_str(), bytes.data(),
 	                                                         static_cast<uint32_t>(bytes.size()), &error);
 	if (!language) {
@@ -56,14 +62,18 @@ const TSLanguage *WasmGrammarLoader::LoadLanguageFromBytes(const string &load_na
 // engine (tree-sitter#3454), so stores must live for the process lifetime.
 // The pool caps live stores at peak parser concurrency and reuses them, which
 // also amortizes the few-millisecond store construction cost.
+//
+// Heap-allocated and never freed: parsers cached in other function-local
+// statics (the language adapter registry) release stores during process
+// teardown, which would be after a static pool's destructor has run.
 static mutex &StorePoolMutex() {
-	static mutex pool_mutex;
-	return pool_mutex;
+	static mutex *pool_mutex = new mutex();
+	return *pool_mutex;
 }
 
 static vector<TSWasmStore *> &StorePool() {
-	static vector<TSWasmStore *> pool;
-	return pool;
+	static vector<TSWasmStore *> *pool = new vector<TSWasmStore *>();
+	return *pool;
 }
 
 TSWasmStore *WasmGrammarLoader::AcquireParserStore() {
@@ -76,12 +86,7 @@ TSWasmStore *WasmGrammarLoader::AcquireParserStore() {
 			return store;
 		}
 	}
-	TSWasmError error {};
-	TSWasmStore *store = ts_wasm_store_new(GetEngine(), &error);
-	if (!store) {
-		throw InternalException("Failed to create wasm store: %s", ConsumeWasmError(error));
-	}
-	return store;
+	return NewStore();
 }
 
 void WasmGrammarLoader::ReleaseParserStore(TSWasmStore *store) {
