@@ -17,3 +17,10 @@ SELECT * FROM register_language('extblocked', '${SITTING_DUCK_TEST_GRAMMAR_DIR}/
                                 symbol := 'tree_sitter_json');
 ----
 <REGEX>:.*[Pp]ermission.*
+
+# The wasm path is gated identically (the check runs before the file is read)
+statement error
+SELECT * FROM register_language('extblockedw', '${SITTING_DUCK_TEST_GRAMMAR_DIR}/json_grammar.wasm',
+                                symbol := 'tree_sitter_json');
+----
+<REGEX>:.*[Pp]ermission.*

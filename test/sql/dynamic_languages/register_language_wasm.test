@@ -1,0 +1,101 @@
+# name: test/sql/dynamic_languages/register_language_wasm.test
+# description: Runtime grammar registration from WASM grammar artifacts
+# group: [dynamic_languages]
+
+require sitting_duck
+
+# Requires the fixtures produced by `make test-grammar-wasm` and a build with
+# WASM grammar support (SITTING_DUCK_WASM_GRAMMARS=ON, the default for native
+# builds). Run with: SITTING_DUCK_TEST_GRAMMAR_DIR=build/test_grammars make test
+require-env SITTING_DUCK_TEST_GRAMMAR_DIR
+
+# Happy path: register the JSON grammar from a release-style .wasm artifact.
+# The module exports tree_sitter_json, so registering under a different name
+# needs the same symbol override the shared-library path uses.
+query TIIT
+SELECT language, CAST(abi_version >= 13 AS INTEGER), node_type_count, status
+FROM register_language('jsonw', '${SITTING_DUCK_TEST_GRAMMAR_DIR}/json_grammar.wasm',
+                       symbol := 'tree_sitter_json',
+                       extensions := ['jsonw'],
+                       overwrite := true);
+----
+jsonw	1	0	registered
+
+# Node-count parity with the built-in json language on identical input
+query I
+SELECT (SELECT count(*) FROM parse_ast('{"a": [1, 2], "b": {"c": true}}', 'jsonw')) =
+       (SELECT count(*) FROM parse_ast('{"a": [1, 2], "b": {"c": true}}', 'json'));
+----
+true
+
+# Multi-threaded glob parse over several files of the wasm-backed language:
+# every file parses and produces nodes
+query II
+SELECT count(DISTINCT file_path), count(*) > 0
+FROM read_ast('test/data/dynamic_grammars/wasm/*.jsonw', 'jsonw');
+----
+4	true
+
+# Extension auto-detection consults the wasm-backed registration
+query T
+SELECT detect_language('some/file.jsonw');
+----
+jsonw
+
+# read_ast auto-detects the language from the registered extension
+query I
+SELECT count(*) > 0 FROM read_ast('test/data/dynamic_grammars/wasm/nested.jsonw');
+----
+true
+
+# Mixed registration: a dlopen grammar and a wasm grammar coexist and agree
+query TT
+SELECT language, status
+FROM register_language('jsonwdl', '${SITTING_DUCK_TEST_GRAMMAR_DIR}/libjson_dyn.so',
+                       symbol := 'tree_sitter_json',
+                       overwrite := true);
+----
+jsonwdl	registered
+
+query I
+SELECT (SELECT count(*) FROM parse_ast('[1, {"k": null}]', 'jsonwdl')) =
+       (SELECT count(*) FROM parse_ast('[1, {"k": null}]', 'jsonw'));
+----
+true
+
+# Garbage bytes behind a valid wasm magic fail at registration, not mid-query
+statement error
+SELECT * FROM register_language('wasmgarbage', '${SITTING_DUCK_TEST_GRAMMAR_DIR}/garbage.wasm',
+                                symbol := 'tree_sitter_json');
+----
+<REGEX>:.*Failed to load WASM grammar.*
+
+# A truncated wasm module fails the same way
+statement error
+SELECT * FROM register_language('wasmtrunc', '${SITTING_DUCK_TEST_GRAMMAR_DIR}/truncated.wasm',
+                                symbol := 'tree_sitter_json');
+----
+<REGEX>:.*Failed to load WASM grammar.*
+
+# WASM grammar modules always export tree_sitter_<x>; other symbol shapes are
+# rejected with an explanation rather than a lookup failure
+statement error
+SELECT * FROM register_language('wasmsym', '${SITTING_DUCK_TEST_GRAMMAR_DIR}/json_grammar.wasm',
+                                symbol := 'json_language');
+----
+<REGEX>:.*tree_sitter_.*
+
+# The default symbol (tree_sitter_<name>) is not exported by this module, so
+# registration fails cleanly instead of registering a broken language
+statement error
+SELECT * FROM register_language('notjson', '${SITTING_DUCK_TEST_GRAMMAR_DIR}/json_grammar.wasm');
+----
+<REGEX>:.*Failed to load WASM grammar.*
+
+# The wasm-backed language appears in the catalog like any dynamic language
+query TTT
+SELECT language, extensions::VARCHAR, parser_type
+FROM ast_supported_languages()
+WHERE language = 'jsonw';
+----
+jsonw	[jsonw]	tree-sitter (dynamic)

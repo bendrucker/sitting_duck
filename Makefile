@@ -51,6 +51,21 @@ test-grammar-lib:
 		generated_parsers/tree-sitter-json/src/parser.c \
 		-o $(TEST_GRAMMAR_DIR)/libjson_dyn.so
 
+# Fetches a release-built JSON grammar .wasm (pinned by SHA256) and derives the
+# invalid-input fixtures used by register_language_wasm.test. Building the .wasm
+# locally would require emscripten. The release artifact is the same thing users
+# will register, which is exactly what the tests should exercise.
+TEST_GRAMMAR_WASM_URL := https://github.com/tree-sitter/tree-sitter-json/releases/download/v0.24.8/tree-sitter-json.wasm
+TEST_GRAMMAR_WASM_SHA256 := d2119fb98d5912719b13f9458574f8608d2d29dfbe45f6be1f860ea1fe2a2405
+
+.PHONY: test-grammar-wasm
+test-grammar-wasm:
+	mkdir -p $(TEST_GRAMMAR_DIR)
+	curl -fsSL -o $(TEST_GRAMMAR_DIR)/json_grammar.wasm "$(TEST_GRAMMAR_WASM_URL)"
+	echo "$(TEST_GRAMMAR_WASM_SHA256)  $(TEST_GRAMMAR_DIR)/json_grammar.wasm" | shasum -a 256 -c -
+	head -c 96 $(TEST_GRAMMAR_DIR)/json_grammar.wasm > $(TEST_GRAMMAR_DIR)/truncated.wasm
+	printf '\0asm\1\0\0\0not a real module' > $(TEST_GRAMMAR_DIR)/garbage.wasm
+
 ############################
 # Format Target Overrides
 ############################
