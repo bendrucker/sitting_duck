@@ -2,6 +2,7 @@
 
 #include "duckdb/common/helper.hpp"
 #include "duckdb/common/exception.hpp"
+#include "wasm_grammar_loader.hpp"
 #include <tree_sitter/api.h>
 
 namespace duckdb {
@@ -70,6 +71,12 @@ public:
 			throw InternalException("Incompatible language version for " + language_name +
 			                        ". Expected: " + std::to_string(TREE_SITTER_LANGUAGE_VERSION) +
 			                        ", Got: " + std::to_string(language_version));
+		}
+
+		// A wasm-backed language executes inside a wasm store. Stores are
+		// single-parser, so every parser gets its own (the parser frees it).
+		if (ts_language_is_wasm(language)) {
+			ts_parser_set_wasm_store(parser_.get(), WasmGrammarLoader::CreateParserStore());
 		}
 
 		if (!ts_parser_set_language(parser_.get(), language)) {

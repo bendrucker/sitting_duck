@@ -9,8 +9,24 @@ set(TARGET_NAME sitting_duck)
 # because WASM side modules (-sSIDE_MODULE=1) can't resolve symbols from
 # separately-linked static libraries — the WASM linker leaves them as
 # unresolved dynamic imports that the host module doesn't provide.
+# Runtime loading of .wasm grammar artifacts via register_language(). On by
+# default for native builds (links wasmtime statically). Set OFF to build
+# without the wasmtime download and size cost. Never available under
+# Emscripten, where wasmtime cannot run.
+option(SITTING_DUCK_WASM_GRAMMARS "Support registering tree-sitter grammars from .wasm artifacts" ON)
+
 if(NOT WASM_LOADABLE_EXTENSIONS)
     set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build tree-sitter as static library" FORCE)
+    if(SITTING_DUCK_WASM_GRAMMARS)
+        include(cmake/FetchWasmtime.cmake)
+        set(TREE_SITTER_FEATURE_WASM ON CACHE BOOL "Enable the Wasm feature" FORCE)
+        # wasm_grammar_loader.cpp calls wasm_engine_new() from wasmtime's wasm.h
+        include_directories(SYSTEM "${WASMTIME_INCLUDE_DIR}")
+        if(WIN32)
+            # wasm.h declares dllimport by default, which breaks static linking
+            add_compile_definitions(WASM_API_EXTERN= WASI_API_EXTERN=)
+        endif()
+    endif()
     add_subdirectory(third_party/tree-sitter/lib)
 endif()
 
@@ -305,6 +321,7 @@ set(EXTENSION_SOURCES
     src/language_adapters/dart_adapter.cpp
     src/language_adapters/dynamic_language_adapter.cpp
     src/dynamic_library_loader.cpp
+    src/wasm_grammar_loader.cpp
     src/register_language_function.cpp
     src/language_config_json.cpp
     third_party/yyjson/yyjson.c

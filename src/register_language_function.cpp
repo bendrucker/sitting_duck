@@ -8,6 +8,9 @@
 #include "language_adapter.hpp"
 #include "language_config_json.hpp"
 #include "tree_sitter_wrappers.hpp"
+#include "wasm_grammar_loader.hpp"
+
+#include <cstring>
 
 namespace duckdb {
 
@@ -96,6 +99,50 @@ static unique_ptr<GlobalTableFunctionState> RegisterLanguageInit(ClientContext &
 	return make_uniq<RegisterLanguageGlobalState>();
 }
 
+// Wasm input is detected by content (the \0asm magic), not file extension.
+// Reading goes through DuckDB's FileSystem so any VFS path works, including
+// httpfs URLs. Paths the VFS cannot open fall through to the dlopen path,
+// which resolves bare library names via the dynamic linker's search path.
+static bool IsWasmGrammarFile(FileSystem &fs, const string &path) {
+	static constexpr char WASM_MAGIC[4] = {0, 'a', 's', 'm'};
+	try {
+		auto handle = fs.OpenFile(path, FileFlags::FILE_FLAGS_READ);
+		char magic[4];
+		return fs.Read(*handle, magic, sizeof(magic)) == sizeof(magic) &&
+		       std::memcmp(magic, WASM_MAGIC, sizeof(magic)) == 0;
+	} catch (const std::exception &) {
+		return false;
+	}
+}
+
+static const TSLanguage *LoadWasmGrammar(FileSystem &fs, const RegisterLanguageBindData &bind_data) {
+	// tree-sitter looks up the module's tree_sitter_<x> export by <x>, so the
+	// symbol override carries the same meaning as in the shared-library path
+	const string expected_prefix = "tree_sitter_";
+	if (!StringUtil::StartsWith(bind_data.symbol, expected_prefix)) {
+		throw InvalidInputException("register_language: WASM grammar modules export a function named "
+		                            "'tree_sitter_<language>', so symbol must start with 'tree_sitter_' (got '%s')",
+		                            bind_data.symbol);
+	}
+	auto load_name = bind_data.symbol.substr(expected_prefix.size());
+	auto bytes = ASTFileUtils::ReadFileToString(fs, bind_data.library_path);
+	return WasmGrammarLoader::LoadLanguageFromBytes(load_name, bytes, bind_data.library_path);
+}
+
+static const TSLanguage *LoadSharedLibraryGrammar(const RegisterLanguageBindData &bind_data) {
+	void *handle = DynamicLibraryLoader::LoadGrammarLibrary(bind_data.library_path);
+	void *symbol_address = DynamicLibraryLoader::ResolveSymbol(handle, bind_data.symbol, bind_data.library_path);
+
+	typedef const TSLanguage *(*GrammarLanguageFn)();
+	auto language_fn = reinterpret_cast<GrammarLanguageFn>(symbol_address);
+	const TSLanguage *language = language_fn();
+	if (!language) {
+		throw InvalidInputException("Symbol '%s' in grammar library '%s' returned a null language", bind_data.symbol,
+		                            bind_data.library_path);
+	}
+	return language;
+}
+
 static void RegisterLanguageFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
 	auto &state = data_p.global_state->Cast<RegisterLanguageGlobalState>();
 	if (state.done) {
@@ -118,16 +165,10 @@ static void RegisterLanguageFunction(ClientContext &context, TableFunctionInput 
 
 	// All validation happens before any registry mutation: a failure below
 	// leaves previously registered languages untouched.
-	void *handle = DynamicLibraryLoader::LoadGrammarLibrary(bind_data.library_path);
-	void *symbol_address = DynamicLibraryLoader::ResolveSymbol(handle, bind_data.symbol, bind_data.library_path);
-
-	typedef const TSLanguage *(*GrammarLanguageFn)();
-	auto language_fn = reinterpret_cast<GrammarLanguageFn>(symbol_address);
-	const TSLanguage *language = language_fn();
-	if (!language) {
-		throw InvalidInputException("Symbol '%s' in grammar library '%s' returned a null language", bind_data.symbol,
-		                            bind_data.library_path);
-	}
+	auto &fs = FileSystem::GetFileSystem(context);
+	const TSLanguage *language = IsWasmGrammarFile(fs, bind_data.library_path)
+	                                 ? LoadWasmGrammar(fs, bind_data)
+	                                 : LoadSharedLibraryGrammar(bind_data);
 
 	uint32_t abi_version = ts_language_version(language);
 	if (!IsCompatibleLanguageAbi(abi_version)) {
@@ -150,7 +191,6 @@ static void RegisterLanguageFunction(ClientContext &context, TableFunctionInput 
 	info->extensions = bind_data.extensions;
 	info->language = language;
 	if (!bind_data.config_path.empty()) {
-		auto &fs = FileSystem::GetFileSystem(context);
 		auto config_text = ASTFileUtils::ReadFileToString(fs, bind_data.config_path);
 		info->node_configs = ParseLanguageConfigJSON(config_text, bind_data.name);
 	}
