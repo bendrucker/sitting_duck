@@ -43,6 +43,14 @@ public:
 		}
 	}
 
+	// A wasm store must go back to the loader's pool, never to ts_parser_delete:
+	// deleting a store frees the engine every store and wasm language shares
+	~TSParserWrapper() {
+		if (parser_) {
+			WasmGrammarLoader::ReleaseParserStore(ts_parser_take_wasm_store(parser_.get()));
+		}
+	}
+
 	// Disable copying
 	TSParserWrapper(const TSParserWrapper &) = delete;
 	TSParserWrapper &operator=(const TSParserWrapper &) = delete;
@@ -74,9 +82,12 @@ public:
 		}
 
 		// A wasm-backed language executes inside a wasm store. Stores are
-		// single-parser, so every parser gets its own (the parser frees it).
-		if (ts_language_is_wasm(language)) {
-			ts_parser_set_wasm_store(parser_.get(), WasmGrammarLoader::CreateParserStore());
+		// single-parser, so every parser holds one of its own for as long as it
+		// lives. Attach at most once: ts_parser_set_wasm_store deletes any
+		// previously attached store, which would free the shared engine.
+		if (ts_language_is_wasm(language) && !has_wasm_store_) {
+			ts_parser_set_wasm_store(parser_.get(), WasmGrammarLoader::AcquireParserStore());
+			has_wasm_store_ = true;
 		}
 
 		if (!ts_parser_set_language(parser_.get(), language)) {
@@ -97,6 +108,7 @@ public:
 
 private:
 	TSParserPtr parser_;
+	bool has_wasm_store_ = false;
 };
 
 // RAII wrapper for TSTree with helper methods

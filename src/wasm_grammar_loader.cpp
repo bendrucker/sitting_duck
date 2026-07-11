@@ -51,13 +51,44 @@ const TSLanguage *WasmGrammarLoader::LoadLanguageFromBytes(const string &load_na
 	return language;
 }
 
-TSWasmStore *WasmGrammarLoader::CreateParserStore() {
+// Pooled rather than created per parser: a deleted store frees the shared
+// engine (tree-sitter#3454), so stores must live for the process lifetime.
+// The pool caps live stores at peak parser concurrency and reuses them, which
+// also amortizes the few-millisecond store construction cost.
+static std::mutex &StorePoolMutex() {
+	static std::mutex pool_mutex;
+	return pool_mutex;
+}
+
+static vector<TSWasmStore *> &StorePool() {
+	static vector<TSWasmStore *> pool;
+	return pool;
+}
+
+TSWasmStore *WasmGrammarLoader::AcquireParserStore() {
+	{
+		std::lock_guard<std::mutex> guard(StorePoolMutex());
+		auto &pool = StorePool();
+		if (!pool.empty()) {
+			TSWasmStore *store = pool.back();
+			pool.pop_back();
+			return store;
+		}
+	}
 	TSWasmError error {};
 	TSWasmStore *store = ts_wasm_store_new(GetEngine(), &error);
 	if (!store) {
 		throw InternalException("Failed to create wasm store: %s", ConsumeWasmError(error));
 	}
 	return store;
+}
+
+void WasmGrammarLoader::ReleaseParserStore(TSWasmStore *store) {
+	if (!store) {
+		return;
+	}
+	std::lock_guard<std::mutex> guard(StorePoolMutex());
+	StorePool().push_back(store);
 }
 
 } // namespace duckdb
@@ -72,9 +103,14 @@ const TSLanguage *WasmGrammarLoader::LoadLanguageFromBytes(const string &load_na
 	                              "(built with SITTING_DUCK_WASM_GRAMMARS=OFF or targeting WASM)");
 }
 
-TSWasmStore *WasmGrammarLoader::CreateParserStore() {
+TSWasmStore *WasmGrammarLoader::AcquireParserStore() {
 	throw NotImplementedException("register_language: this build does not support WASM grammars "
 	                              "(built with SITTING_DUCK_WASM_GRAMMARS=OFF or targeting WASM)");
+}
+
+// No wasm language can exist in this build, so parsers never hold a store and
+// ts_parser_take_wasm_store always hands this nullptr
+void WasmGrammarLoader::ReleaseParserStore(TSWasmStore *store) {
 }
 
 } // namespace duckdb

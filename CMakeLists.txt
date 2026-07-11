@@ -26,6 +26,10 @@ if(NOT WASM_LOADABLE_EXTENSIONS)
             # wasm.h declares dllimport by default, which breaks static linking
             add_compile_definitions(WASM_API_EXTERN= WASI_API_EXTERN=)
         endif()
+    else()
+        # FORCE so toggling the option off overrides the cached ON from an
+        # earlier configure of the same build directory
+        set(TREE_SITTER_FEATURE_WASM OFF CACHE BOOL "Enable the Wasm feature" FORCE)
     endif()
     add_subdirectory(third_party/tree-sitter/lib)
 endif()

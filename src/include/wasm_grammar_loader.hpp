@@ -20,11 +20,19 @@ public:
 	// carrying the TSWasmError message on failure, naming `path`.
 	static const TSLanguage *LoadLanguageFromBytes(const string &load_name, const string &bytes, const string &path);
 
-	// Create a wasm store for a parser about to use a wasm-backed language.
+	// Acquire a wasm store for a parser about to use a wasm-backed language.
 	// Stores are single-parser, but all share one process-global engine, so
-	// languages loaded at registration time work with any of them. The parser
-	// takes ownership (ts_parser_delete frees an attached store).
-	static TSWasmStore *CreateParserStore();
+	// languages loaded at registration time work with any of them.
+	//
+	// Stores come from a global pool and MUST go back via ReleaseParserStore
+	// (after ts_parser_take_wasm_store), never to ts_wasm_store_delete or a
+	// still-attached ts_parser_delete: deleting any store also frees the shared
+	// engine (tree-sitter#3454), corrupting every other store and language.
+	static TSWasmStore *AcquireParserStore();
+
+	// Return a store obtained from AcquireParserStore to the pool. Accepts
+	// nullptr so callers can pass ts_parser_take_wasm_store's result directly.
+	static void ReleaseParserStore(TSWasmStore *store);
 };
 
 } // namespace duckdb
